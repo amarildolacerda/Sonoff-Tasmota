@@ -76,6 +76,7 @@ const char kMqttCommands[] PROGMEM =
 uint16_t mqtt_retry_counter = 1;            // MQTT connection retry counter
 uint8_t mqtt_initial_connection_state = 2;  // MQTT connection messages state
 bool mqtt_connected = false;                // MQTT virtual connection status
+bool mqtt_allowed = false;                  // MQTT enabled and parameters valid
 
 /*********************************************************************************************\
  * MQTT driver specific code need to provide the following functions:
@@ -83,7 +84,7 @@ bool mqtt_connected = false;                // MQTT virtual connection status
  * bool MqttIsConnected()
  * void MqttDisconnect()
  * void MqttSubscribeLib(char *topic)
- * bool MqttPublishLib(const char* topic, boolean retained)
+ * bool MqttPublishLib(const char* topic, bool retained)
  * void MqttLoop()
 \*********************************************************************************************/
 
@@ -114,7 +115,7 @@ void MqttSubscribeLib(char *topic)
   MqttClient.loop();  // Solve LmacRxBlk:1 messages
 }
 
-bool MqttPublishLib(const char* topic, boolean retained)
+bool MqttPublishLib(const char* topic, bool retained)
 {
   bool result = MqttClient.publish(topic, mqtt_data, retained);
   yield();  // #3313
@@ -151,7 +152,7 @@ void MqttSubscribeLib(char *topic)
   MqttClient.Subscribe(topic, 0);
 }
 
-bool MqttPublishLib(const char* topic, boolean retained)
+bool MqttPublishLib(const char* topic, bool retained)
 {
   return MqttClient.Publish(topic, mqtt_data, strlen(mqtt_data), 0, retained);
 }
@@ -179,13 +180,13 @@ void MqttDisconnect(void)
 void MqttMyDataCb(MQTTClient* client, char* topic, char* data, int data_len)
 //void MqttMyDataCb(MQTTClient *client, char topic[], char data[], int data_len)
 {
-//  MqttDataHandler((char*)topic, (byte*)data, data_len);
+//  MqttDataHandler((char*)topic, (uint8_t*)data, data_len);
 }
 */
 
 void MqttMyDataCb(String &topic, String &data)
 {
-  MqttDataHandler((char*)topic.c_str(), (byte*)data.c_str(), data.length());
+  MqttDataHandler((char*)topic.c_str(), (uint8_t*)data.c_str(), data.length());
 }
 
 void MqttSubscribeLib(char *topic)
@@ -193,7 +194,7 @@ void MqttSubscribeLib(char *topic)
   MqttClient.subscribe(topic, 0);
 }
 
-bool MqttPublishLib(const char* topic, boolean retained)
+bool MqttPublishLib(const char* topic, bool retained)
 {
   return MqttClient.publish(topic, mqtt_data, strlen(mqtt_data), retained, 0);
 }
@@ -210,9 +211,9 @@ void MqttLoop(void)
 
 #ifdef USE_DISCOVERY
 #ifdef MQTT_HOST_DISCOVERY
-boolean MqttDiscoverServer(void)
+void MqttDiscoverServer(void)
 {
-  if (!mdns_begun) { return false; }
+  if (!mdns_begun) { return; }
 
   int n = MDNS.queryService("mqtt", "tcp");  // Search for mqtt service
 
@@ -220,16 +221,21 @@ boolean MqttDiscoverServer(void)
   AddLog(LOG_LEVEL_INFO);
 
   if (n > 0) {
-    // Note: current strategy is to get the first MQTT service (even when many are found)
-    snprintf_P(Settings.mqtt_host, sizeof(Settings.mqtt_host), MDNS.IP(0).toString().c_str());
-    Settings.mqtt_port = MDNS.port(0);
+    uint8_t i = 0;             // If the hostname isn't set, use the first record found.
+#ifdef MDNS_HOSTNAME
+    for (i = n; i > 0; i--) {  // Search from last to first and use first if not found
+      if (!strcmp(MDNS.hostname(i).c_str(), MDNS_HOSTNAME)) {
+        break;                 // Stop at matching record
+      }
+    }
+#endif  // MDNS_HOSTNAME
+    snprintf_P(Settings.mqtt_host, sizeof(Settings.mqtt_host), MDNS.IP(i).toString().c_str());
+    Settings.mqtt_port = MDNS.port(i);
 
     snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_MDNS D_MQTT_SERVICE_FOUND " %s, " D_IP_ADDRESS " %s, " D_PORT " %d"),
-      MDNS.hostname(0).c_str(), Settings.mqtt_host, Settings.mqtt_port);
+      MDNS.hostname(i).c_str(), Settings.mqtt_host, Settings.mqtt_port);
     AddLog(LOG_LEVEL_INFO);
   }
-
-  return n > 0;
 }
 #endif  // MQTT_HOST_DISCOVERY
 #endif  // USE_DISCOVERY
@@ -251,7 +257,7 @@ void MqttSubscribe(char *topic)
   MqttSubscribeLib(topic);
 }
 
-void MqttPublishDirect(const char* topic, boolean retained)
+void MqttPublishDirect(const char* topic, bool retained)
 {
   char sretained[CMDSZ];
   char slog_type[10];
@@ -285,7 +291,7 @@ void MqttPublishDirect(const char* topic, boolean retained)
   }
 }
 
-void MqttPublish(const char* topic, boolean retained)
+void MqttPublish(const char* topic, bool retained)
 {
   char *me;
 
@@ -303,7 +309,7 @@ void MqttPublish(const char* topic)
   MqttPublish(topic, false);
 }
 
-void MqttPublishPrefixTopic_P(uint8_t prefix, const char* subtopic, boolean retained)
+void MqttPublishPrefixTopic_P(uint8_t prefix, const char* subtopic, bool retained)
 {
 /* prefix 0 = cmnd using subtopic
  * prefix 1 = stat using subtopic
@@ -316,7 +322,7 @@ void MqttPublishPrefixTopic_P(uint8_t prefix, const char* subtopic, boolean reta
   char stopic[TOPSZ];
 
   snprintf_P(romram, sizeof(romram), ((prefix > 3) && !Settings.flag.mqtt_response) ? S_RSLT_RESULT : subtopic);
-  for (byte i = 0; i < strlen(romram); i++) {
+  for (uint8_t i = 0; i < strlen(romram); i++) {
     romram[i] = toupper(romram[i]);
   }
   prefix &= 3;
@@ -329,14 +335,14 @@ void MqttPublishPrefixTopic_P(uint8_t prefix, const char* subtopic)
   MqttPublishPrefixTopic_P(prefix, subtopic, false);
 }
 
-void MqttPublishPowerState(byte device)
+void MqttPublishPowerState(uint8_t device)
 {
   char stopic[TOPSZ];
   char scommand[33];
 
   if ((device < 1) || (device > devices_present)) { device = 1; }
 
-  if ((SONOFF_IFAN02 == Settings.module) && (device > 1)) {
+  if ((SONOFF_IFAN02 == my_module_type) && (device > 1)) {
     if (GetFanspeed() < MAX_FAN_SPEED) {  // 4 occurs when fanspeed is 3 and RC button 2 is pressed
 #ifdef USE_DOMOTICZ
       DomoticzUpdateFanState();  // RC Button feedback
@@ -358,7 +364,7 @@ void MqttPublishPowerState(byte device)
   }
 }
 
-void MqttPublishPowerBlinkState(byte device)
+void MqttPublishPowerBlinkState(uint8_t device)
 {
   char scommand[33];
 
@@ -388,7 +394,7 @@ void MqttConnected(void)
 {
   char stopic[TOPSZ];
 
-  if (Settings.flag.mqtt_enabled) {
+  if (mqtt_allowed) {
     AddLog_P(LOG_LEVEL_INFO, S_LOG_MQTT, PSTR(D_CONNECTED));
     mqtt_connected = true;
     mqtt_retry_counter = 0;
@@ -427,9 +433,9 @@ void MqttConnected(void)
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"" D_JSON_RESTARTREASON "\":\"%s\"}"),
       (GetResetReason() == "Exception") ? ESP.getResetInfo().c_str() : GetResetReason().c_str());
     MqttPublishPrefixTopic_P(TELE, PSTR(D_RSLT_INFO "3"));
-    for (byte i = 1; i <= devices_present; i++) {
+    for (uint8_t i = 1; i <= devices_present; i++) {
       MqttPublishPowerState(i);
-      if (SONOFF_IFAN02 == Settings.module) { break; }  // Report status of light relay only
+      if (SONOFF_IFAN02 == my_module_type) { break; }  // Report status of light relay only
     }
     if (Settings.tele_period) { tele_period = Settings.tele_period -9; }  // Enable TelePeriod in 9 seconds
     rules_flag.system_boot = 1;
@@ -444,15 +450,15 @@ void MqttConnected(void)
 }
 
 #ifdef USE_MQTT_TLS
-boolean MqttCheckTls(void)
+bool MqttCheckTls(void)
 {
   char fingerprint1[60];
   char fingerprint2[60];
-  boolean result = false;
+  bool result = false;
 
   fingerprint1[0] = '\0';
   fingerprint2[0] = '\0';
-  for (byte i = 0; i < sizeof(Settings.mqtt_fingerprint[0]); i++) {
+  for (uint8_t i = 0; i < sizeof(Settings.mqtt_fingerprint[0]); i++) {
     snprintf_P(fingerprint1, sizeof(fingerprint1), PSTR("%s%s%02X"), fingerprint1, (i) ? " " : "", Settings.mqtt_fingerprint[0][i]);
     snprintf_P(fingerprint2, sizeof(fingerprint2), PSTR("%s%s%02X"), fingerprint2, (i) ? " " : "", Settings.mqtt_fingerprint[1][i]);
   }
@@ -485,7 +491,19 @@ boolean MqttCheckTls(void)
       AddLog_P(LOG_LEVEL_INFO, S_LOG_MQTT, PSTR(D_VERIFIED "2"));
       result = true;
     }
-#endif
+#ifdef MDNS_HOSTNAME
+    // If the hostname is set, check that as well.
+    // This lets certs with the hostname for the CN be used.
+    else if (EspClient.verify(fingerprint1, MDNS_HOSTNAME)) {
+      AddLog_P(LOG_LEVEL_INFO, S_LOG_MQTT, PSTR(D_VERIFIED "1"));
+      result = true;
+    }
+    else if (EspClient.verify(fingerprint2, MDNS_HOSTNAME)) {
+      AddLog_P(LOG_LEVEL_INFO, S_LOG_MQTT, PSTR(D_VERIFIED "2"));
+      result = true;
+    }
+#endif  // MDNS_HOSTNAME
+#endif  // USE_MQTT_TLS_CA_CERT
   }
   if (!result) AddLog_P(LOG_LEVEL_INFO, S_LOG_MQTT, PSTR(D_FAILED));
   EspClient.stop();
@@ -498,7 +516,18 @@ void MqttReconnect(void)
 {
   char stopic[TOPSZ];
 
-  if (!Settings.flag.mqtt_enabled) {
+  mqtt_allowed = Settings.flag.mqtt_enabled;
+  if (mqtt_allowed) {
+#ifdef USE_DISCOVERY
+#ifdef MQTT_HOST_DISCOVERY
+    MqttDiscoverServer();
+#endif  // MQTT_HOST_DISCOVERY
+#endif  // USE_DISCOVERY
+    if (!strlen(Settings.mqtt_host) || !Settings.mqtt_port) {
+      mqtt_allowed = false;
+    }
+  }
+  if (!mqtt_allowed) {
     MqttConnected();
     return;
   }
@@ -512,14 +541,6 @@ void MqttReconnect(void)
   mqtt_connected = false;
   mqtt_retry_counter = Settings.mqtt_retry;
   global_state.mqtt_down = 1;
-
-#ifndef USE_MQTT_TLS
-#ifdef USE_DISCOVERY
-#ifdef MQTT_HOST_DISCOVERY
-  if (!strlen(Settings.mqtt_host) && !MqttDiscoverServer()) { return; }
-#endif  // MQTT_HOST_DISCOVERY
-#endif  // USE_DISCOVERY
-#endif  // USE_MQTT_TLS
 
   char *mqtt_user = NULL;
   char *mqtt_pwd = NULL;
@@ -585,13 +606,11 @@ void MqttCheck(void)
     if (!MqttIsConnected()) {
       global_state.mqtt_down = 1;
       if (!mqtt_retry_counter) {
-#ifndef USE_MQTT_TLS
 #ifdef USE_DISCOVERY
 #ifdef MQTT_HOST_DISCOVERY
         if (!strlen(Settings.mqtt_host) && !mdns_begun) { return; }
 #endif  // MQTT_HOST_DISCOVERY
 #endif  // USE_DISCOVERY
-#endif  // USE_MQTT_TLS
         MqttReconnect();
       } else {
         mqtt_retry_counter--;
@@ -619,7 +638,7 @@ bool MqttCommand(void)
   uint16_t data_len = XdrvMailbox.data_len;
   uint16_t payload16 = XdrvMailbox.payload16;
   int16_t payload = XdrvMailbox.payload;
-  uint8_t grpflg =  XdrvMailbox.grpflg;
+  bool grpflg =  XdrvMailbox.grpflg;
   char *type = XdrvMailbox.topic;
   char *dataBuf = XdrvMailbox.data;
 
@@ -663,20 +682,20 @@ bool MqttCommand(void)
     if ((data_len > 0) && (data_len < sizeof(fingerprint))) {
       strlcpy(fingerprint, (SC_CLEAR == Shortcut(dataBuf)) ? "" : (SC_DEFAULT == Shortcut(dataBuf)) ? (1 == index) ? MQTT_FINGERPRINT1 : MQTT_FINGERPRINT2 : dataBuf, sizeof(fingerprint));
       char *p = fingerprint;
-      for (byte i = 0; i < 20; i++) {
+      for (uint8_t i = 0; i < 20; i++) {
         Settings.mqtt_fingerprint[index -1][i] = strtol(p, &p, 16);
       }
       restart_flag = 2;
     }
     fingerprint[0] = '\0';
-    for (byte i = 0; i < sizeof(Settings.mqtt_fingerprint[index -1]); i++) {
+    for (uint8_t i = 0; i < sizeof(Settings.mqtt_fingerprint[index -1]); i++) {
       snprintf_P(fingerprint, sizeof(fingerprint), PSTR("%s%s%02X"), fingerprint, (i) ? " " : "", Settings.mqtt_fingerprint[index -1][i]);
     }
     snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_INDEX_SVALUE, command, index, fingerprint);
   }
 #endif
-  else if ((CMND_MQTTCLIENT == command_code) && !grpflg) {
-    if ((data_len > 0) && (data_len < sizeof(Settings.mqtt_client))) {
+  else if (CMND_MQTTCLIENT == command_code) {
+    if (!grpflg && (data_len > 0) && (data_len < sizeof(Settings.mqtt_client))) {
       strlcpy(Settings.mqtt_client, (SC_DEFAULT == Shortcut(dataBuf)) ? MQTT_CLIENT_ID : dataBuf, sizeof(Settings.mqtt_client));
       restart_flag = 2;
     }
@@ -747,8 +766,8 @@ bool MqttCommand(void)
     }
     snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, Settings.mqtt_grptopic);
   }
-  else if ((CMND_TOPIC == command_code) && !grpflg) {
-    if ((data_len > 0) && (data_len < sizeof(Settings.mqtt_topic))) {
+  else if (CMND_TOPIC == command_code) {
+    if (!grpflg && (data_len > 0) && (data_len < sizeof(Settings.mqtt_topic))) {
       MakeValidMqtt(0, dataBuf);
       if (!strcmp(dataBuf, mqtt_client)) SetShortcut(dataBuf, SC_DEFAULT);
       strlcpy(stemp1, (SC_DEFAULT == Shortcut(dataBuf)) ? MQTT_TOPIC : dataBuf, sizeof(stemp1));
@@ -761,8 +780,8 @@ bool MqttCommand(void)
     }
     snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_SVALUE, command, Settings.mqtt_topic);
   }
-  else if ((CMND_BUTTONTOPIC == command_code) && !grpflg) {
-    if ((data_len > 0) && (data_len < sizeof(Settings.button_topic))) {
+  else if (CMND_BUTTONTOPIC == command_code) {
+    if (!grpflg && (data_len > 0) && (data_len < sizeof(Settings.button_topic))) {
       MakeValidMqtt(0, dataBuf);
       if (!strcmp(dataBuf, mqtt_client)) SetShortcut(dataBuf, SC_DEFAULT);
       switch (Shortcut(dataBuf)) {
@@ -849,17 +868,18 @@ bool MqttCommand(void)
 const char S_CONFIGURE_MQTT[] PROGMEM = D_CONFIGURE_MQTT;
 
 const char HTTP_BTN_MENU_MQTT[] PROGMEM =
-  "<br/><form action='" WEB_HANDLE_MQTT "' method='get'><button>" D_CONFIGURE_MQTT "</button></form>";
+  "<p><form action='" WEB_HANDLE_MQTT "' method='get'><button>" D_CONFIGURE_MQTT "</button></form></p>";
 
 const char HTTP_FORM_MQTT[] PROGMEM =
-  "<fieldset><legend><b>&nbsp;" D_MQTT_PARAMETERS "&nbsp;</b></legend><form method='get' action='" WEB_HANDLE_MQTT "'>"
-  "<br/><b>" D_HOST "</b> (" MQTT_HOST ")<br/><input id='mh' name='mh' placeholder='" MQTT_HOST" ' value='{m1'><br/>"
-  "<br/><b>" D_PORT "</b> (" STR(MQTT_PORT) ")<br/><input id='ml' name='ml' placeholder='" STR(MQTT_PORT) "' value='{m2'><br/>"
-  "<br/><b>" D_CLIENT "</b> ({m0)<br/><input id='mc' name='mc' placeholder='" MQTT_CLIENT_ID "' value='{m3'><br/>"
-  "<br/><b>" D_USER "</b> (" MQTT_USER ")<br/><input id='mu' name='mu' placeholder='" MQTT_USER "' value='{m4'><br/>"
-  "<br/><b>" D_PASSWORD "</b><br/><input id='mp' name='mp' type='password' placeholder='" D_PASSWORD "' value='" D_ASTERIX "'><br/>"
-  "<br/><b>" D_TOPIC "</b> = %topic% (" MQTT_TOPIC ")<br/><input id='mt' name='mt' placeholder='" MQTT_TOPIC" ' value='{m6'><br/>"
-  "<br/><b>" D_FULL_TOPIC "</b> (" MQTT_FULLTOPIC ")<br/><input id='mf' name='mf' placeholder='" MQTT_FULLTOPIC" ' value='{m7'><br/>";
+  "<fieldset><legend><b>&nbsp;" D_MQTT_PARAMETERS "&nbsp;</b></legend>"
+  "<form method='get' action='" WEB_HANDLE_MQTT "'>"
+  "<p><b>" D_HOST "</b> (" MQTT_HOST ")<br/><input id='mh' name='mh' placeholder='" MQTT_HOST" ' value='{m1'></p>"
+  "<p><b>" D_PORT "</b> (" STR(MQTT_PORT) ")<br/><input id='ml' name='ml' placeholder='" STR(MQTT_PORT) "' value='{m2'></p>"
+  "<p><b>" D_CLIENT "</b> ({m0)<br/><input id='mc' name='mc' placeholder='" MQTT_CLIENT_ID "' value='{m3'></p>"
+  "<p><b>" D_USER "</b> (" MQTT_USER ")<br/><input id='mu' name='mu' placeholder='" MQTT_USER "' value='{m4'></p>"
+  "<p><b>" D_PASSWORD "</b><br/><input id='mp' name='mp' type='password' placeholder='" D_PASSWORD "' value='" D_ASTERIX "'></p>"
+  "<p><b>" D_TOPIC "</b> = %topic% (" MQTT_TOPIC ")<br/><input id='mt' name='mt' placeholder='" MQTT_TOPIC" ' value='{m6'></p>"
+  "<p><b>" D_FULL_TOPIC "</b> (" MQTT_FULLTOPIC ")<br/><input id='mf' name='mf' placeholder='" MQTT_FULLTOPIC" ' value='{m7'></p>";
 
 void HandleMqttConfiguration(void)
 {
@@ -930,9 +950,9 @@ void MqttSaveSettings(void)
  * Interface
 \*********************************************************************************************/
 
-boolean Xdrv02(byte function)
+bool Xdrv02(uint8_t function)
 {
-  boolean result = false;
+  bool result = false;
 
   if (Settings.flag.mqtt_enabled) {
     switch (function) {

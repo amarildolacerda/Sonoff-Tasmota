@@ -32,6 +32,9 @@
  * 11          +WS2812    RGB(W) no         (One WS2812 RGB or RGBW ledstrip)
  * 12          AiLight    RGBW   no
  * 13          Sonoff B1  RGBCW  yes
+ * 19          SM16716    RGB    no
+ * 20          SM16716+W  RGBW   no
+ * 21          SM16716+CW RGBCW  yes
  *
  * light_scheme  WS2812  3+ Colors  1+2 Colors  Effect
  * ------------  ------  ---------  ----------  -----------------
@@ -354,6 +357,117 @@ void LightMy92x1Duty(uint8_t duty_r, uint8_t duty_g, uint8_t duty_b, uint8_t dut
   os_delay_us(12);                      // TStop > 12us.
 }
 
+#ifdef USE_SM16716
+/*********************************************************************************************\
+ * SM16716 - Controlling RGB over a synchronous serial line
+ * Copyright (C) 2019  Gabor Simon
+ *
+ * Source: https://community.home-assistant.io/t/cheap-uk-wifi-bulbs-with-tasmota-teardown-help-tywe3s/40508/27
+ *
+\*********************************************************************************************/
+
+// Enable this for debug logging
+//#define D_LOG_SM16716       "SM16716: "
+
+uint8_t sm16716_pin_clk     = 100;
+uint8_t sm16716_pin_dat     = 100;
+uint8_t sm16716_pin_sel     = 100;
+uint8_t sm16716_enabled     = 0;
+
+void SM16716_SendBit(uint8_t v)
+{
+  /* NOTE:
+   * According to the spec sheet, max freq is 30 MHz, that is 16.6 ns per high/low half of the
+   * clk square wave. That is less than the overhead of 'digitalWrite' at this clock rate,
+   * so no additional delays are needed yet. */
+
+  digitalWrite(sm16716_pin_dat, (v != 0) ? HIGH : LOW);
+  //delayMicroseconds(1);
+  digitalWrite(sm16716_pin_clk, HIGH);
+  //delayMicroseconds(1);
+  digitalWrite(sm16716_pin_clk, LOW);
+}
+
+void SM16716_SendByte(uint8_t v)
+{
+  uint8_t mask;
+
+  for (mask = 0x80; mask; mask >>= 1) {
+    SM16716_SendBit(v & mask);
+  }
+}
+
+void SM16716_Update(uint8_t duty_r, uint8_t duty_g, uint8_t duty_b)
+{
+  if (sm16716_pin_sel < 99) {
+    uint8_t sm16716_should_enable = (duty_r | duty_g | duty_b);
+    if (!sm16716_enabled && sm16716_should_enable) {
+#ifdef D_LOG_SM16716
+      snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_SM16716 "turning color on"));
+      AddLog(LOG_LEVEL_DEBUG);
+#endif // D_LOG_SM16716
+      sm16716_enabled = 1;
+      digitalWrite(sm16716_pin_sel, HIGH);
+      // in testing I found it takes a minimum of ~380us to wake up the chip
+      // tested on a Merkury RGBW with an SM726EB
+      delayMicroseconds(1000);
+      SM16716_Init();
+    }
+    else if (sm16716_enabled && !sm16716_should_enable) {
+#ifdef D_LOG_SM16716
+      snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_SM16716 "turning color off"));
+      AddLog(LOG_LEVEL_DEBUG);
+#endif // D_LOG_SM16716
+      sm16716_enabled = 0;
+      digitalWrite(sm16716_pin_sel, LOW);
+    }
+  }
+#ifdef D_LOG_SM16716
+  snprintf_P(log_data, sizeof(log_data),
+      PSTR(D_LOG_SM16716 "Update; rgb=%02x%02x%02x"),
+      duty_r, duty_g, duty_b);
+  AddLog(LOG_LEVEL_DEBUG);
+#endif // D_LOG_SM16716
+
+  // send start bit
+  SM16716_SendBit(1);
+  // send 24-bit rgb data
+  SM16716_SendByte(duty_r);
+  SM16716_SendByte(duty_g);
+  SM16716_SendByte(duty_b);
+  // send a 'do it' pulse
+  // (if multiple chips are chained, each one processes the 1st '1rgb' 25-bit block and
+  // passes on the rest, right until the one starting with 0)
+  //SM16716_Init();
+  SM16716_SendBit(0);
+  SM16716_SendByte(0);
+  SM16716_SendByte(0);
+  SM16716_SendByte(0);
+}
+
+bool SM16716_ModuleSelected(void)
+{
+  sm16716_pin_clk = pin[GPIO_SM16716_CLK];
+  sm16716_pin_dat = pin[GPIO_SM16716_DAT];
+  sm16716_pin_sel = pin[GPIO_SM16716_SEL];
+#ifdef D_LOG_SM16716
+  snprintf_P(log_data, sizeof(log_data),
+      PSTR(D_LOG_SM16716 "ModuleSelected; clk_pin=%d, dat_pin=%d)"),
+      sm16716_pin_clk, sm16716_pin_dat);
+  AddLog(LOG_LEVEL_DEBUG);
+#endif // D_LOG_SM16716
+  return (sm16716_pin_clk < 99) && (sm16716_pin_dat < 99);
+}
+
+void SM16716_Init(void)
+{
+  for (uint8_t t_init = 0; t_init < 50; ++t_init) {
+    SM16716_SendBit(0);
+  }
+}
+
+#endif  // ifdef USE_SM16716
+
 /********************************************************************************************/
 
 void LightInit(void)
@@ -367,13 +481,13 @@ void LightInit(void)
     Settings.light_color[0] = 255;      // One channel only supports Dimmer but needs max color
   }
   if (light_type < LT_PWM6) {           // PWM
-    for (byte i = 0; i < light_type; i++) {
+    for (uint8_t i = 0; i < light_type; i++) {
       Settings.pwm_value[i] = 0;        // Disable direct PWM control
       if (pin[GPIO_PWM1 +i] < 99) {
         pinMode(pin[GPIO_PWM1 +i], OUTPUT);
       }
     }
-    if (SONOFF_LED == Settings.module) { // Fix Sonoff Led instabilities
+    if (SONOFF_LED == my_module_type) { // Fix Sonoff Led instabilities
       if (!my_module.io[4]) {
         pinMode(4, OUTPUT);             // Stop floating outputs
         digitalWrite(4, LOW);
@@ -402,6 +516,32 @@ void LightInit(void)
     max_scheme = LS_MAX + WS2812_SCHEMES;
   }
 #endif  // USE_WS2812 ************************************************************************
+#ifdef USE_SM16716
+  else if (LT_SM16716 == light_type - light_subtype) {
+    // init PWM
+    for (uint8_t i = 0; i < light_subtype; i++) {
+      Settings.pwm_value[i] = 0;        // Disable direct PWM control
+      if (pin[GPIO_PWM1 +i] < 99) {
+        pinMode(pin[GPIO_PWM1 +i], OUTPUT);
+      }
+    }
+    // init sm16716
+    pinMode(sm16716_pin_clk, OUTPUT);
+    digitalWrite(sm16716_pin_clk, LOW);
+
+    pinMode(sm16716_pin_dat, OUTPUT);
+    digitalWrite(sm16716_pin_dat, LOW);
+
+    if (sm16716_pin_sel < 99) {
+      pinMode(sm16716_pin_sel, OUTPUT);
+      digitalWrite(sm16716_pin_sel, LOW);
+      // no need to call SM16716_Init here, it will be called after sel goes HIGH
+    } else {
+      // no sel pin means you have an 'always on' chip, so init right away
+      SM16716_Init();
+    }
+  }
+#endif  // ifdef USE_SM16716
   else {
     light_pdi_pin = pin[GPIO_DI];
     light_pdcki_pin = pin[GPIO_DCKI];
@@ -438,7 +578,7 @@ void LightSetColorTemp(uint16_t ct)
   }
   uint16_t icold = (100 * (347 - my_ct)) / 136;
   uint16_t iwarm = (100 * my_ct) / 136;
-  if (PHILIPS == Settings.module) {
+  if (PHILIPS == my_module_type) {
     // Xiaomi Philips bulbs follow a different scheme:
     // channel 0=intensity, channel2=temperature
     Settings.light_color[1] = (uint8_t)icold;
@@ -474,7 +614,7 @@ void LightSetDimmer(uint8_t myDimmer)
 {
   float temp;
 
-  if (PHILIPS == Settings.module) {
+  if (PHILIPS == my_module_type) {
     // Xiaomi Philips bulbs use two PWM channels with a different scheme:
     float dimmer = 100 / (float)myDimmer;
     temp = (float)Settings.light_color[0] / dimmer; // channel 1 is intensity
@@ -487,7 +627,7 @@ void LightSetDimmer(uint8_t myDimmer)
     Settings.light_color[0] = 255;    // One PWM channel only supports Dimmer but needs max color
   }
   float dimmer = 100 / (float)myDimmer;
-  for (byte i = 0; i < light_subtype; i++) {
+  for (uint8_t i = 0; i < light_subtype; i++) {
     if (Settings.flag.light_signal) {
       temp = (float)light_signal_color[i] / dimmer;
     } else {
@@ -501,7 +641,7 @@ void LightSetColor(void)
 {
   uint8_t highest = 0;
 
-  for (byte i = 0; i < light_subtype; i++) {
+  for (uint8_t i = 0; i < light_subtype; i++) {
     if (highest < light_current_color[i]) {
       highest = light_current_color[i];
     }
@@ -509,7 +649,7 @@ void LightSetColor(void)
   float mDim = (float)highest / 2.55;
   Settings.light_dimmer = (uint8_t)mDim;
   float dimmer = 100 / mDim;
-  for (byte i = 0; i < light_subtype; i++) {
+  for (uint8_t i = 0; i < light_subtype; i++) {
     float temp = (float)light_current_color[i] * dimmer;
     Settings.light_color[i] = (uint8_t)temp;
   }
@@ -547,7 +687,7 @@ char* LightGetColor(uint8_t type, char* scolor)
 {
   LightSetDimmer(Settings.light_dimmer);
   scolor[0] = '\0';
-  for (byte i = 0; i < light_subtype; i++) {
+  for (uint8_t i = 0; i < light_subtype; i++) {
     if (!type && Settings.flag.decimal_text) {
       snprintf_P(scolor, 25, PSTR("%s%s%d"), scolor, (i > 0) ? "," : "", light_current_color[i]);
     } else {
@@ -590,7 +730,7 @@ void LightState(uint8_t append)
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"" D_CMND_HSBCOLOR "\":\"%d,%d,%d\""), mqtt_data, h,s,b);
     // Add status for each channel
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s,\"" D_CMND_CHANNEL "\":[" ), mqtt_data);
-    for (byte i = 0; i < light_subtype; i++) {
+    for (uint8_t i = 0; i < light_subtype; i++) {
       snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s%s%d" ), mqtt_data, (i > 0 ? "," : ""), light_current_color[i] * 100 / 255);
     }
     snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s]" ), mqtt_data);
@@ -637,7 +777,7 @@ void LightPreparePower(void)
 void LightFade(void)
 {
   if (0 == Settings.light_fade) {
-    for (byte i = 0; i < light_subtype; i++) {
+    for (uint8_t i = 0; i < light_subtype; i++) {
       light_new_color[i] = light_current_color[i];
     }
   } else {
@@ -646,7 +786,7 @@ void LightFade(void)
       shift = (strip_timer_counter % (Settings.light_speed -6)) ? 0 : 8;
     }
     if (shift) {
-      for (byte i = 0; i < light_subtype; i++) {
+      for (uint8_t i = 0; i < light_subtype; i++) {
         if (light_new_color[i] != light_current_color[i]) {
           if (light_new_color[i] < light_current_color[i]) {
             light_new_color[i] += ((light_current_color[i] - light_new_color[i]) >> shift) +1;
@@ -681,7 +821,7 @@ void LightWheel(uint8_t wheel_pos)
   light_entry_color[3] = 0;
   light_entry_color[4] = 0;
   float dimmer = 100 / (float)Settings.light_dimmer;
-  for (byte i = 0; i < LST_RGB; i++) {
+  for (uint8_t i = 0; i < LST_RGB; i++) {
     float temp = (float)light_entry_color[i] / dimmer;
     light_entry_color[i] = (uint8_t)temp;
   }
@@ -700,7 +840,7 @@ void LightCycleColor(int8_t direction)
 void LightRandomColor(void)
 {
   uint8_t light_update = 0;
-  for (byte i = 0; i < LST_RGB; i++) {
+  for (uint8_t i = 0; i < LST_RGB; i++) {
     if (light_new_color[i] != light_current_color[i]) {
       light_update = 1;
     }
@@ -736,7 +876,7 @@ void LightAnimate(void)
   if (!light_power) {                   // Power Off
     sleep = Settings.sleep;
     strip_timer_counter = 0;
-    for (byte i = 0; i < light_subtype; i++) {
+    for (uint8_t i = 0; i < light_subtype; i++) {
       light_still_on += light_new_color[i];
     }
     if (light_still_on && Settings.light_fade && (Settings.light_scheme < LS_MAX)) {
@@ -744,19 +884,19 @@ void LightAnimate(void)
       if (speed > 6) {
         speed = 6;
       }
-      for (byte i = 0; i < light_subtype; i++) {
+      for (uint8_t i = 0; i < light_subtype; i++) {
         if (light_new_color[i] > 0) {
           light_new_color[i] -= (light_new_color[i] >> speed) +1;
         }
       }
     } else {
-      for (byte i = 0; i < light_subtype; i++) {
+      for (uint8_t i = 0; i < light_subtype; i++) {
         light_new_color[i] = 0;
       }
     }
   }
   else {
-    sleep = 0;
+    sleep = (LS_POWER == Settings.light_scheme) ? Settings.sleep : 0;  // If no animation then use sleep as is
     switch (Settings.light_scheme) {
       case LS_POWER:
         LightSetDimmer(Settings.light_dimmer);
@@ -765,7 +905,7 @@ void LightAnimate(void)
       case LS_WAKEUP:
         if (2 == light_wakeup_active) {
           light_wakeup_active = 1;
-          for (byte i = 0; i < light_subtype; i++) {
+          for (uint8_t i = 0; i < light_subtype; i++) {
             light_new_color[i] = 0;
           }
           light_wakeup_counter = 0;
@@ -777,7 +917,7 @@ void LightAnimate(void)
           light_wakeup_dimmer++;
           if (light_wakeup_dimmer <= Settings.light_dimmer) {
             LightSetDimmer(light_wakeup_dimmer);
-            for (byte i = 0; i < light_subtype; i++) {
+            for (uint8_t i = 0; i < light_subtype; i++) {
               light_new_color[i] = light_current_color[i];
             }
           } else {
@@ -807,14 +947,14 @@ void LightAnimate(void)
   }
 
   if ((Settings.light_scheme < LS_MAX) || !light_power) {
-    for (byte i = 0; i < light_subtype; i++) {
+    for (uint8_t i = 0; i < light_subtype; i++) {
       if (light_last_color[i] != light_new_color[i]) {
         light_update = 1;
       }
     }
     if (light_update) {
       light_update = 0;
-      for (byte i = 0; i < light_subtype; i++) {
+      for (uint8_t i = 0; i < light_subtype; i++) {
         light_last_color[i] = light_new_color[i];
         cur_col[i] = light_last_color[i]*Settings.rgbwwTable[i]/255;
         cur_col[i] = (Settings.light_correction) ? ledTable[cur_col[i]] : cur_col[i];
@@ -844,6 +984,24 @@ void LightAnimate(void)
         Ws2812SetColor(0, cur_col[0], cur_col[1], cur_col[2], cur_col[3]);
       }
 #endif  // USE_ES2812 ************************************************************************
+#ifdef USE_SM16716
+      else if (LT_SM16716 == light_type - light_subtype) {
+        // handle any PWM pins, skipping the first 3 values for sm16716
+        for (uint8_t i = 3; i < light_subtype; i++) {
+          if (pin[GPIO_PWM1 +i-3] < 99) {
+            if (cur_col[i] > 0xFC) {
+              cur_col[i] = 0xFC;   // Fix unwanted blinking and PWM watchdog errors for values close to pwm_range (H801, Arilux and BN-SZ01)
+            }
+            uint16_t curcol = cur_col[i] * (Settings.pwm_range / 255);
+//            snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_APPLICATION "Cur_Col%d %d, CurCol %d"), i, cur_col[i], curcol);
+//            AddLog(LOG_LEVEL_DEBUG);
+            analogWrite(pin[GPIO_PWM1 +i-3], bitRead(pwm_inverted, i-3) ? Settings.pwm_range - curcol : curcol);
+          }
+        }
+        // handle sm16716 update
+        SM16716_Update(cur_col[0], cur_col[1], cur_col[2]);
+      }
+#endif  // ifdef USE_SM16716
       else if (light_type > LT_WS2812) {
         LightMy92x1Duty(cur_col[0], cur_col[1], cur_col[2], cur_col[3], cur_col[4]);
       }
@@ -1012,7 +1170,7 @@ void LightSetHsb(float hue, float sat, float bri, uint16_t ct, bool gotct)
  * Commands
 \*********************************************************************************************/
 
-boolean LightColorEntry(char *buffer, uint8_t buffer_length)
+bool LightColorEntry(char *buffer, uint8_t buffer_length)
 {
   char scolor[10];
   char *p;
@@ -1048,7 +1206,7 @@ boolean LightColorEntry(char *buffer, uint8_t buffer_length)
     entry_type = 2;                                 // Decimal
   }
   else if (((2 * light_subtype) == buffer_length) || (buffer_length > 3)) {  // Hexadecimal entry
-    for (byte i = 0; i < buffer_length / 2; i++) {
+    for (uint8_t i = 0; i < buffer_length / 2; i++) {
       strlcpy(scolor, buffer + (i *2), 3);
       light_entry_color[i] = (uint8_t)strtol(scolor, &p, 16);
     }
@@ -1081,12 +1239,12 @@ boolean LightColorEntry(char *buffer, uint8_t buffer_length)
 
 /********************************************************************************************/
 
-boolean LightCommand(void)
+bool LightCommand(void)
 {
   char command [CMDSZ];
-  boolean serviced = true;
-  boolean coldim = false;
-  boolean valid_entry = false;
+  bool serviced = true;
+  bool coldim = false;
+  bool valid_entry = false;
   char scolor[25];
   char option = (1 == XdrvMailbox.data_len) ? XdrvMailbox.data[0] : '\0';
 
@@ -1118,7 +1276,7 @@ boolean LightCommand(void)
           Settings.light_scheme = 0;
           coldim = true;
         } else {             // Color3, 4, 5 and 6
-          for (byte i = 0; i < LST_RGB; i++) {
+          for (uint8_t i = 0; i < LST_RGB; i++) {
             Settings.ws_color[XdrvMailbox.index -3][i] = light_entry_color[i];
           }
         }
@@ -1129,7 +1287,7 @@ boolean LightCommand(void)
     }
     if (XdrvMailbox.index >= 3) {
       scolor[0] = '\0';
-      for (byte i = 0; i < LST_RGB; i++) {
+      for (uint8_t i = 0; i < LST_RGB; i++) {
         if (Settings.flag.decimal_text) {
           snprintf_P(scolor, 25, PSTR("%s%s%d"), scolor, (i > 0) ? "," : "", Settings.ws_color[XdrvMailbox.index -3][i]);
         } else {
@@ -1203,7 +1361,7 @@ boolean LightCommand(void)
         if (LightColorEntry(color, strlen(color))) {
           Ws2812SetColor(idx, light_entry_color[0], light_entry_color[1], light_entry_color[2], light_entry_color[3]);
           idx++;
-          if (idx >= Settings.light_pixels) break;
+          if (idx > Settings.light_pixels) break;
         } else {
           break;
         }
@@ -1343,7 +1501,7 @@ boolean LightCommand(void)
       light_update = 1;
     }
     scolor[0] = '\0';
-    for (byte i = 0; i < LST_RGBWC; i++) {
+    for (uint8_t i = 0; i < LST_RGBWC; i++) {
       snprintf_P(scolor, 25, PSTR("%s%s%d"), scolor, (i > 0) ? "," : "", Settings.rgbwwTable[i]);
     }
     snprintf_P(mqtt_data, sizeof(mqtt_data), S_JSON_COMMAND_INDEX_SVALUE, command, XdrvMailbox.index, scolor);
@@ -1402,9 +1560,9 @@ boolean LightCommand(void)
  * Interface
 \*********************************************************************************************/
 
-boolean Xdrv04(byte function)
+bool Xdrv04(uint8_t function)
 {
-  boolean result = false;
+  bool result = false;
 
   if (light_type) {
     switch (function) {

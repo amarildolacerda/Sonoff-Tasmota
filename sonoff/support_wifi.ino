@@ -32,6 +32,21 @@
 #define WIFI_CHECK_SEC         20   // seconds
 #define WIFI_RETRY_OFFSET_SEC  20   // seconds
 
+/*
+// This worked for 2_5_0_BETA2 but fails since then. Waiting for a solution from core team (#4952)
+#ifdef USE_MQTT_TLS
+#if defined(ARDUINO_ESP8266_RELEASE_2_3_0) || defined(ARDUINO_ESP8266_RELEASE_2_4_0) || defined(ARDUINO_ESP8266_RELEASE_2_4_1) || defined(ARDUINO_ESP8266_RELEASE_2_4_2)
+#else
+#define USING_AXTLS
+#include <ESP8266WiFi.h>
+// force use of AxTLS (BearSSL is now default) which uses less memory (#4952)
+#include <WiFiClientSecureAxTLS.h>
+using namespace axTLS;
+#endif  // ARDUINO_ESP8266_RELEASE prior to 2_5_0
+#else
+#include <ESP8266WiFi.h>            // Wifi, MQTT, Ota, WifiManager
+#endif  // USE_MQTT_TLS
+*/
 #include <ESP8266WiFi.h>            // Wifi, MQTT, Ota, WifiManager
 
 uint8_t wifi_counter;
@@ -41,6 +56,7 @@ uint8_t wifi_status;
 uint8_t wps_result;
 uint8_t wifi_config_type = 0;
 uint8_t wifi_config_counter = 0;
+uint8_t mdns_begun = 0;             // mDNS active
 
 uint8_t wifi_scan_state;
 uint8_t wifi_bssid[6];
@@ -59,7 +75,7 @@ int WifiGetRssiAsQuality(int rssi)
   return quality;
 }
 
-boolean WifiConfigCounter(void)
+bool WifiConfigCounter(void)
 {
   if (wifi_config_counter) {
     wifi_config_counter = WIFI_CONFIG_SEC;
@@ -94,12 +110,12 @@ void WifiWpsStatusCallback(wps_cb_status status)
   }
 }
 
-boolean WifiWpsConfigDone(void)
+bool WifiWpsConfigDone(void)
 {
   return (!wps_result);
 }
 
-boolean WifiWpsConfigBegin(void)
+bool WifiWpsConfigBegin(void)
 {
   wps_result = 99;
   if (!wifi_wps_disable()) { return false; }
@@ -349,6 +365,14 @@ void WifiCheckIp(void)
       Settings.ip_address[3] = (uint32_t)WiFi.dnsIP();
     }
     wifi_status = WL_CONNECTED;
+#ifdef USE_DISCOVERY
+#ifdef WEBSERVER_ADVERTISE
+    if (2 == mdns_begun) {
+      MDNS.update();
+      AddLog_P(LOG_LEVEL_DEBUG_MORE, D_LOG_MDNS, "MDNS.update");
+    }
+#endif  // USE_DISCOVERY
+#endif  // WEBSERVER_ADVERTISE
   } else {
     WifiSetState(0);
     uint8_t wifi_config_tool = Settings.sta_config;
@@ -477,12 +501,12 @@ void WifiCheck(uint8_t param)
           }
         }
 
-#ifdef BE_MINIMAL
+#ifdef FIRMWARE_MINIMAL
         if (1 == RtcSettings.ota_loader) {
           RtcSettings.ota_loader = 0;
           ota_state_flag = 3;
         }
-#endif  // BE_MINIMAL
+#endif  // FIRMWARE_MINIMAL
 
 #ifdef USE_DISCOVERY
         if (Settings.flag3.mdns_enabled) {
@@ -492,7 +516,7 @@ void WifiCheck(uint8_t param)
 //              mdns_delayed_start--;
 //            } else {
 //              mdns_delayed_start = Settings.param[P_MDNS_DELAYED_START];
-              mdns_begun = MDNS.begin(my_hostname);
+              mdns_begun = (uint8_t)MDNS.begin(my_hostname);
               snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_MDNS "%s"), (mdns_begun) ? D_INITIALIZED : D_FAILED);
               AddLog(LOG_LEVEL_INFO);
 //            }
@@ -505,7 +529,8 @@ void WifiCheck(uint8_t param)
           StartWebserver(Settings.webserver, WiFi.localIP());
 #ifdef USE_DISCOVERY
 #ifdef WEBSERVER_ADVERTISE
-          if (mdns_begun) {
+          if (1 == mdns_begun) {
+            mdns_begun = 2;
             MDNS.addService("http", "tcp", WEB_PORT);
           }
 #endif  // WEBSERVER_ADVERTISE
@@ -530,7 +555,7 @@ void WifiCheck(uint8_t param)
 #if defined(USE_WEBSERVER) && defined(USE_EMULATION)
         UdpDisconnect();
 #endif  // USE_EMULATION
-        mdns_begun = false;
+        mdns_begun = 0;
 #ifdef USE_KNX
         knx_started = false;
 #endif  // USE_KNX

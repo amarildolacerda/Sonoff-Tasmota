@@ -44,6 +44,7 @@
 #define D_JSON_CHANNEL "Channel"
 #define D_JSON_CO2 "CarbonDioxide"
 #define D_JSON_COMMAND "Command"
+#define D_JSON_CONFIG_HOLDER "CfgHolder"
 #define D_JSON_CONNECT_FAILED "Connect failed"
 #define D_JSON_COREVERSION "Core"
 #define D_JSON_COUNT "Count"
@@ -72,6 +73,7 @@
 #define D_JSON_FROM "from"
 #define D_JSON_GAS "Gas"
 #define D_JSON_GATEWAY "Gateway"
+#define D_JSON_GROUPS "Groups"
 #define D_JSON_HEAPSIZE "Heap"
 #define D_JSON_HIGH "High"
 #define D_JSON_HOST_NOT_FOUND "Host not found"
@@ -92,6 +94,7 @@
 #define D_JSON_MAC "Mac"
 #define D_JSON_MASK "Mask"
 #define D_JSON_MINIMAL "minimal"
+#define D_JSON_MODEL "Model"
 #define D_JSON_NO "No"
 #define D_JSON_NOISE "Noise"
 #define D_JSON_NONE "None"
@@ -111,6 +114,7 @@
 #define D_JSON_PROGRAMSIZE "ProgramSize"
 #define D_JSON_REFERENCETEMPERATURE "ReferenceTemperature"
 #define D_JSON_RESET "Reset"
+#define D_JSON_RESOLUTION "Resolution"
 #define D_JSON_RESTARTING "Restarting"
 #define D_JSON_RESTARTREASON "RestartReason"
 #define D_JSON_RSSI "RSSI"
@@ -157,6 +161,7 @@
 #define D_JSON_ZERO_POINT_CALIBRATION "Zero Point Calibration"
 
 #define D_RSLT_ENERGY "ENERGY"
+#define D_RSLT_HASS_STATE "HASS_STATE"
 #define D_RSLT_INFO "INFO"
 #define D_RSLT_MARGINS "MARGINS"
 #define D_RSLT_POWER "POWER"
@@ -165,6 +170,8 @@
 #define D_RSLT_STATE "STATE"
 #define D_RSLT_UPTIME "UPTIME"
 #define D_RSLT_WARNING "WARNING"
+
+#define D_LOG_SOME_SETTINGS_RESET "Some settings have been reset"
 
 // Commands sonoff.ino
 #define D_CMND_BACKLOG "Backlog"
@@ -240,6 +247,7 @@
   #define D_WCFG_6_SERIAL "Serial"
 #define D_CMND_FRIENDLYNAME "FriendlyName"
 #define D_CMND_SWITCHMODE "SwitchMode"
+#define D_CMND_INTERLOCK "Interlock"
 #define D_CMND_TELEPERIOD "TelePeriod"
 #define D_CMND_RESTART "Restart"
   #define D_JSON_ONE_TO_RESTART "1 to restart"
@@ -256,7 +264,11 @@
 #define D_CMND_SERIALSEND "SerialSend"
 #define D_CMND_SERIALDELIMITER "SerialDelimiter"
 #define D_CMND_BAUDRATE "Baudrate"
-#define D_LOG_SOME_SETTINGS_RESET "Some settings have been reset"
+#define D_CMND_TEMPLATE "Template"
+  #define D_JSON_NAME "NAME"
+  #define D_JSON_GPIO "GPIO"
+  #define D_JSON_FLAG "FLAG"
+  #define D_JSON_BASE "BASE"
 
 // Commands xdrv_01_mqtt.ino
 #define D_CMND_MQTTHOST "MqttHost"
@@ -407,6 +419,7 @@
 /********************************************************************************************/
 
 #define D_ASTERIX "********"
+#define D_ASTERISK_PWD "****"
 
 #ifndef MY_LANGUAGE
   #include "language/en-GB.h"
@@ -556,6 +569,7 @@ const char HTTP_SNS_CO2[] PROGMEM = "%s{s}%s " D_CO2 "{m}%d " D_UNIT_PARTS_PER_M
 
 const char S_MAIN_MENU[] PROGMEM = D_MAIN_MENU;
 const char S_CONFIGURATION[] PROGMEM = D_CONFIGURATION;
+const char S_CONFIGURE_TEMPLATE[] PROGMEM = D_CONFIGURE_TEMPLATE;
 const char S_CONFIGURE_MODULE[] PROGMEM = D_CONFIGURE_MODULE;
 const char S_CONFIGURE_WIFI[] PROGMEM = D_CONFIGURE_WIFI;
 const char S_NO_NETWORKS_FOUND[] PROGMEM = D_NO_NETWORKS_FOUND;

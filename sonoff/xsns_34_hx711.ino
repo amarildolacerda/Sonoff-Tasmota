@@ -67,12 +67,12 @@ long hx_offset = 0;
 long hx_scale = 1;
 uint8_t hx_type = 1;
 uint8_t hx_sample_count = 0;
-uint8_t hx_tare_flg = 0;
 uint8_t hx_calibrate_step = HX_CAL_END;
 uint8_t hx_calibrate_timer = 0;
 uint8_t hx_calibrate_msg = 0;
 uint8_t hx_pin_sck;
 uint8_t hx_pin_dout;
+bool hx_tare_flg = false;
 
 /*********************************************************************************************/
 
@@ -118,7 +118,7 @@ long HxRead()
 
 void HxReset(void)
 {
-  hx_tare_flg = 1;
+  hx_tare_flg = true;
   hx_sum_weight = 0;
   hx_sample_count = 0;
 }
@@ -155,7 +155,7 @@ bool HxCommand(void)
   bool show_parms = false;
   char sub_string[XdrvMailbox.data_len +1];
 
-  for (byte ca = 0; ca < XdrvMailbox.data_len; ca++) {
+  for (uint8_t ca = 0; ca < XdrvMailbox.data_len; ca++) {
     if ((' ' == XdrvMailbox.data[ca]) || ('=' == XdrvMailbox.data[ca])) { XdrvMailbox.data[ca] = ','; }
   }
 
@@ -257,7 +257,7 @@ void HxEvery100mSecond(void)
     if (hx_weight < 0) { hx_weight = 0; }
 
     if (hx_tare_flg) {
-      hx_tare_flg = 0;
+      hx_tare_flg = false;
       hx_offset = average;                           // grams
     }
 
@@ -301,7 +301,7 @@ void HxEvery100mSecond(void)
 
       if (HX_CAL_FAIL == hx_calibrate_step) {        // Calibration failed
         hx_calibrate_step--;
-        hx_tare_flg = 1;                             // Perform a reset using old scale
+        hx_tare_flg = true;                          // Perform a reset using old scale
         HxCalibrationStateTextJson(0);
       }
       if (HX_CAL_FINISH == hx_calibrate_step) {      // Calibration finished
@@ -329,7 +329,7 @@ const char HTTP_HX711_CAL[] PROGMEM = "%s"
   "{s}HX711 %s{m}{e}";
 #endif  // USE_WEBSERVER
 
-void HxShow(boolean json)
+void HxShow(bool json)
 {
   char scount[30] = { 0 };
 
@@ -377,19 +377,19 @@ const char HTTP_BTN_MENU_MAIN_HX711[] PROGMEM =
   "<br/><form action='" WEB_HANDLE_HX711 "' method='get'><button name='reset'>" D_RESET_HX711 "</button></form>";
 
 const char HTTP_BTN_MENU_HX711[] PROGMEM =
-  "<br/><form action='" WEB_HANDLE_HX711 "' method='get'><button>" D_CONFIGURE_HX711 "</button></form>";
+  "<p><form action='" WEB_HANDLE_HX711 "' method='get'><button>" D_CONFIGURE_HX711 "</button></form></p>";
 
 const char HTTP_FORM_HX711[] PROGMEM =
   "<fieldset><legend><b>&nbsp;" D_CALIBRATION "&nbsp;</b></legend>"
   "<form method='post' action='" WEB_HANDLE_HX711 "'>"
-  "<br/><b>" D_REFERENCE_WEIGHT "</b> (" D_UNIT_KILOGRAM ")<br/><input type='number' step='0.001' id='p1' name='p1' placeholder='0' value='{1'><br/>"
-  "<br/><button name='calibrate' type='submit'>" D_CALIBRATE "</button><br/>"
+  "<p><b>" D_REFERENCE_WEIGHT "</b> (" D_UNIT_KILOGRAM ")<br/><input type='number' step='0.001' id='p1' name='p1' placeholder='0' value='{1'></p>"
+  "<br/><button name='calibrate' type='submit'>" D_CALIBRATE "</button>"
   "</form>"
   "</fieldset><br/><br/>"
 
   "<fieldset><legend><b>&nbsp;" D_HX711_PARAMETERS "&nbsp;</b></legend>"
   "<form method='post' action='" WEB_HANDLE_HX711 "'>"
-  "<br/><b>" D_ITEM_WEIGHT "</b> (" D_UNIT_KILOGRAM ")<br/><input type='number' max='6.5535' step='0.0001' id='p2' name='p2' placeholder='0.0' value='{2'><br/>";
+  "<p><b>" D_ITEM_WEIGHT "</b> (" D_UNIT_KILOGRAM ")<br/><input type='number' max='6.5535' step='0.0001' id='p2' name='p2' placeholder='0.0' value='{2'></p>";
 
 void HandleHxAction(void)
 {
@@ -469,9 +469,9 @@ void HxLogUpdates(void)
  * Interface
 \*********************************************************************************************/
 
-boolean Xsns34(byte function)
+bool Xsns34(uint8_t function)
 {
-  boolean result = false;
+  bool result = false;
 
   if (hx_type) {
     switch (function) {

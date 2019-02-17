@@ -31,7 +31,7 @@ Ticker tickerOSWatch;
 #define OSWATCH_RESET_TIME 120
 
 static unsigned long oswatch_last_loop_time;
-byte oswatch_blocked_loop = 0;
+uint8_t oswatch_blocked_loop = 0;
 
 #ifndef USE_WS2812_DMA  // Collides with Neopixelbus but solves exception
 //void OsWatchTicker() ICACHE_RAM_ATTR;
@@ -84,7 +84,7 @@ String GetResetReason(void)
   }
 }
 
-boolean OsWatchBlockedLoop(void)
+bool OsWatchBlockedLoop(void)
 {
   return oswatch_blocked_loop;
 }
@@ -154,7 +154,7 @@ char* subStr(char* dest, char* str, const char *delim, int index)
   return sub;
 }
 
-double CharToDouble(char *str)
+double CharToDouble(const char *str)
 {
   // simple ascii to double, because atof or strtod are too large
   char strbuf[24];
@@ -210,9 +210,11 @@ char* Unescape(char* buffer, uint16_t* size)
 {
   uint8_t* read = (uint8_t*)buffer;
   uint8_t* write = (uint8_t*)buffer;
-  uint16_t start_size = *size;
-  uint16_t end_size = *size;
+  int16_t start_size = *size;
+  int16_t end_size = *size;
   uint8_t che = 0;
+
+//  AddLogBuffer(LOG_LEVEL_DEBUG, (uint8_t*)buffer, *size);
 
   while (start_size > 0) {
     uint8_t ch = *read++;
@@ -235,6 +237,14 @@ char* Unescape(char* buffer, uint16_t* size)
           case 's': che = ' ';  break;   // 20 Space
           case 't': che = '\t'; break;   // 09 Horizontal tab
           case 'v': che = '\v'; break;   // 0B Vertical tab
+          case 'x': {
+            uint8_t* start = read;
+            che = (uint8_t)strtol((const char*)read, (char**)&read, 16);
+            start_size -= (uint16_t)(read - start);
+            end_size -= (uint16_t)(read - start);
+            break;
+          }
+          case '"': che = '\"'; break;   // 22 Quotation mark
 //          case '?': che = '\?'; break;   // 3F Question mark
           default : {
             che = chi;
@@ -247,6 +257,9 @@ char* Unescape(char* buffer, uint16_t* size)
     }
   }
   *size = end_size;
+
+//  AddLogBuffer(LOG_LEVEL_DEBUG, (uint8_t*)buffer, *size);
+
   return buffer;
 }
 
@@ -291,27 +304,6 @@ char* UpperCase_P(char* dest, const char* source)
   }
   return dest;
 }
-
-/*
-char* LTrim(char* p)
-{
-  while ((*p != '\0') && (isblank(*p))) {
-    p++;                                     // Trim leading spaces
-  }
-  return p;
-}
-
-char* RTrim(char* p)
-{
-  char* q = p + strlen(p) -1;
-  while ((q >= p) && (isblank(*q))) {
-    q--;                                     // Trim trailing spaces
-  }
-  q++;
-  *q = '\0';
-  return p;
-}
-*/
 
 char* Trim(char* p)
 {
@@ -361,10 +353,10 @@ uint8_t Shortcut(const char* str)
   return result;
 }
 
-boolean ParseIp(uint32_t* addr, const char* str)
+bool ParseIp(uint32_t* addr, const char* str)
 {
   uint8_t *part = (uint8_t*)addr;
-  byte i;
+  uint8_t i;
 
   *addr = 0;
   for (i = 0; i < 4; i++) {
@@ -378,7 +370,7 @@ boolean ParseIp(uint32_t* addr, const char* str)
   return (3 == i);
 }
 
-void MakeValidMqtt(byte option, char* str)
+void MakeValidMqtt(uint8_t option, char* str)
 {
 // option 0 = replace by underscore
 // option 1 = delete character
@@ -490,51 +482,6 @@ float ConvertPressure(float p)
 String PressureUnit(void)
 {
   return (Settings.flag.pressure_conversion) ? String(D_UNIT_MILLIMETER_MERCURY) : String(D_UNIT_PRESSURE);
-}
-
-String AnyModuleName(uint8_t index)
-{
-  return FPSTR(kModules[index].name);
-}
-
-String ModuleName()
-{
-  return FPSTR(kModules[Settings.module].name);
-}
-
-void ModuleGpios(myio *gp)
-{
-  uint8_t *dest = (uint8_t *)gp;
-  memset(dest, GPIO_NONE, sizeof(myio));
-
-  uint8_t src[sizeof(mycfgio)];
-  memcpy_P(&src, &kModules[Settings.module].gp, sizeof(mycfgio));
-  // 11 85 00 85 85 00 00 00 15 38 85 00 00 81
-
-//  AddLogSerial(LOG_LEVEL_DEBUG, (uint8_t *)&src, sizeof(mycfgio));
-
-  for (uint8_t i = 0; i < sizeof(mycfgio); i++) {
-    if (i < 6) {
-      dest[i] = src[i];     // GPIO00 - GPIO05
-    }
-    else if (i < 8) {
-      dest[i +3] = src[i];  // GPIO09 - GPIO10
-    }
-    else {
-      dest[i +4] = src[i];  // GPIO12 - GPIO16 and ADC0
-    }
-  }
-  // 11 85 00 85 85 00 00 00 00 00 00 00 15 38 85 00 00 81
-
-//  AddLogSerial(LOG_LEVEL_DEBUG, (uint8_t *)gp, sizeof(myio));
-}
-
-gpio_flag ModuleFlag()
-{
-  gpio_flag flag;
-
-  memcpy_P(&flag, &kModules[Settings.module].flag, sizeof(gpio_flag));
-  return flag;
 }
 
 void SetGlobalValues(float temperature, float humidity)
@@ -688,61 +635,6 @@ int GetStateNumber(char *state_text)
   return state_number;
 }
 
-boolean GetUsedInModule(byte val, uint8_t *arr)
-{
-  int offset = 0;
-
-  if (!val) { return false; }  // None
-
-  if ((val >= GPIO_KEY1) && (val < GPIO_KEY1 + MAX_KEYS)) {
-    offset = (GPIO_KEY1_NP - GPIO_KEY1);
-  }
-  if ((val >= GPIO_KEY1_NP) && (val < GPIO_KEY1_NP + MAX_KEYS)) {
-    offset = -(GPIO_KEY1_NP - GPIO_KEY1);
-  }
-
-  if ((val >= GPIO_SWT1) && (val < GPIO_SWT1 + MAX_SWITCHES)) {
-    offset = (GPIO_SWT1_NP - GPIO_SWT1);
-  }
-  if ((val >= GPIO_SWT1_NP) && (val < GPIO_SWT1_NP + MAX_SWITCHES)) {
-    offset = -(GPIO_SWT1_NP - GPIO_SWT1);
-  }
-
-  if ((val >= GPIO_REL1) && (val < GPIO_REL1 + MAX_RELAYS)) {
-    offset = (GPIO_REL1_INV - GPIO_REL1);
-  }
-  if ((val >= GPIO_REL1_INV) && (val < GPIO_REL1_INV + MAX_RELAYS)) {
-    offset = -(GPIO_REL1_INV - GPIO_REL1);
-  }
-
-  if ((val >= GPIO_LED1) && (val < GPIO_LED1 + MAX_LEDS)) {
-    offset = (GPIO_LED1_INV - GPIO_LED1);
-  }
-  if ((val >= GPIO_LED1_INV) && (val < GPIO_LED1_INV + MAX_LEDS)) {
-    offset = -(GPIO_LED1_INV - GPIO_LED1);
-  }
-
-  if ((val >= GPIO_PWM1) && (val < GPIO_PWM1 + MAX_PWMS)) {
-    offset = (GPIO_PWM1_INV - GPIO_PWM1);
-  }
-  if ((val >= GPIO_PWM1_INV) && (val < GPIO_PWM1_INV + MAX_PWMS)) {
-    offset = -(GPIO_PWM1_INV - GPIO_PWM1);
-  }
-
-  if ((val >= GPIO_CNTR1) && (val < GPIO_CNTR1 + MAX_COUNTERS)) {
-    offset = (GPIO_CNTR1_NP - GPIO_CNTR1);
-  }
-  if ((val >= GPIO_CNTR1_NP) && (val < GPIO_CNTR1_NP + MAX_COUNTERS)) {
-    offset = -(GPIO_CNTR1_NP - GPIO_CNTR1);
-  }
-
-  for (byte i = 0; i < MAX_GPIO_PIN; i++) {
-    if (arr[i] == val) { return true; }
-    if (arr[i] == val + offset) { return true; }
-  }
-  return false;
-}
-
 void SetSerialBaudrate(int baudrate)
 {
   Settings.baudrate = baudrate / 1200;
@@ -761,7 +653,7 @@ void SetSerialBaudrate(int baudrate)
 
 void ClaimSerial(void)
 {
-  serial_local = 1;
+  serial_local = true;
   AddLog_P(LOG_LEVEL_INFO, PSTR("SNS: Hardware Serial"));
   SetSeriallog(LOG_LEVEL_NONE);
   baudrate = Serial.baudRate();
@@ -803,13 +695,166 @@ void ShowSource(int source)
   }
 }
 
-uint8_t ValidGPIO(uint8_t pin, uint8_t gpio)
+/*********************************************************************************************\
+ * GPIO Module and Template management
+\*********************************************************************************************/
+
+String AnyModuleName(uint8_t index)
+{
+  if (USER_MODULE == index) {
+    return String(Settings.user_template.name);
+  } else {
+    return FPSTR(kModules[index].name);
+  }
+}
+
+String ModuleName()
+{
+  return AnyModuleName(Settings.module);
+}
+
+void ModuleGpios(myio *gp)
+{
+  uint8_t *dest = (uint8_t *)gp;
+  memset(dest, GPIO_NONE, sizeof(myio));
+
+  uint8_t src[sizeof(mycfgio)];
+  if (USER_MODULE == Settings.module) {
+//    src = Settings.user_template.gp;
+    memcpy(&src, &Settings.user_template.gp, sizeof(mycfgio));
+  } else {
+    memcpy_P(&src, &kModules[Settings.module].gp, sizeof(mycfgio));
+  }
+  // 11 85 00 85 85 00 00 00 15 38 85 00 00 81
+
+//  AddLogBuffer(LOG_LEVEL_DEBUG, (uint8_t *)&src, sizeof(mycfgio));
+
+  uint8_t j = 0;
+  for (uint8_t i = 0; i < sizeof(mycfgio); i++) {
+    if (6 == i) { j = 9; }
+    if (8 == i) { j = 12; }
+    dest[j] = src[i];
+    j++;
+  }
+  // 11 85 00 85 85 00 00 00 00 00 00 00 15 38 85 00 00 81
+
+//  AddLogBuffer(LOG_LEVEL_DEBUG, (uint8_t *)gp, sizeof(myio));
+}
+
+gpio_flag ModuleFlag()
+{
+  gpio_flag flag;
+
+  if (USER_MODULE == Settings.module) {
+    flag = Settings.user_template.flag;
+  } else {
+    memcpy_P(&flag, &kModules[Settings.module].flag, sizeof(gpio_flag));
+  }
+
+  return flag;
+}
+
+void ModuleDefault(uint8_t module)
+{
+  if (USER_MODULE == module) { module = WEMOS; }  // Generic
+  Settings.user_template_base = module;
+  memcpy_P(&Settings.user_template, &kModules[module], sizeof(mytmplt));
+}
+
+void SetModuleType()
+{
+  my_module_type = (USER_MODULE == Settings.module) ? Settings.user_template_base : Settings.module;
+}
+
+uint8_t ValidPin(uint8_t pin, uint8_t gpio)
 {
   uint8_t result = gpio;
+
+  if (((pin > 5) && (pin < 9)) || (11 == pin)) {
+    result = GPIO_NONE;  // Disable flash pins GPIO6, GPIO7, GPIO8 and GPIO11
+  }
   if ((WEMOS == Settings.module) && (!Settings.flag3.user_esp8285_enable)) {
     if ((pin == 9) || (pin == 10)) { result = GPIO_NONE; }  // Disable possible flash GPIO9 and GPIO10
   }
   return result;
+}
+
+bool ValidGPIO(uint8_t pin, uint8_t gpio)
+{
+  return (GPIO_USER == ValidPin(pin, gpio));  // Only allow GPIO_USER pins
+}
+
+bool GetUsedInModule(uint8_t val, uint8_t *arr)
+{
+  int offset = 0;
+
+  if (!val) { return false; }  // None
+
+  if ((val >= GPIO_KEY1) && (val < GPIO_KEY1 + MAX_KEYS)) {
+    offset = (GPIO_KEY1_NP - GPIO_KEY1);
+  }
+  if ((val >= GPIO_KEY1_NP) && (val < GPIO_KEY1_NP + MAX_KEYS)) {
+    offset = -(GPIO_KEY1_NP - GPIO_KEY1);
+  }
+  if ((val >= GPIO_KEY1_INV) && (val < GPIO_KEY1_INV + MAX_KEYS)) {
+    offset = -(GPIO_KEY1_INV - GPIO_KEY1);
+  }
+  if ((val >= GPIO_KEY1_INV_NP) && (val < GPIO_KEY1_INV_NP + MAX_KEYS)) {
+    offset = -(GPIO_KEY1_INV_NP - GPIO_KEY1);
+  }
+
+  if ((val >= GPIO_SWT1) && (val < GPIO_SWT1 + MAX_SWITCHES)) {
+    offset = (GPIO_SWT1_NP - GPIO_SWT1);
+  }
+  if ((val >= GPIO_SWT1_NP) && (val < GPIO_SWT1_NP + MAX_SWITCHES)) {
+    offset = -(GPIO_SWT1_NP - GPIO_SWT1);
+  }
+
+  if ((val >= GPIO_REL1) && (val < GPIO_REL1 + MAX_RELAYS)) {
+    offset = (GPIO_REL1_INV - GPIO_REL1);
+  }
+  if ((val >= GPIO_REL1_INV) && (val < GPIO_REL1_INV + MAX_RELAYS)) {
+    offset = -(GPIO_REL1_INV - GPIO_REL1);
+  }
+
+  if ((val >= GPIO_LED1) && (val < GPIO_LED1 + MAX_LEDS)) {
+    offset = (GPIO_LED1_INV - GPIO_LED1);
+  }
+  if ((val >= GPIO_LED1_INV) && (val < GPIO_LED1_INV + MAX_LEDS)) {
+    offset = -(GPIO_LED1_INV - GPIO_LED1);
+  }
+
+  if ((val >= GPIO_PWM1) && (val < GPIO_PWM1 + MAX_PWMS)) {
+    offset = (GPIO_PWM1_INV - GPIO_PWM1);
+  }
+  if ((val >= GPIO_PWM1_INV) && (val < GPIO_PWM1_INV + MAX_PWMS)) {
+    offset = -(GPIO_PWM1_INV - GPIO_PWM1);
+  }
+
+  if ((val >= GPIO_CNTR1) && (val < GPIO_CNTR1 + MAX_COUNTERS)) {
+    offset = (GPIO_CNTR1_NP - GPIO_CNTR1);
+  }
+  if ((val >= GPIO_CNTR1_NP) && (val < GPIO_CNTR1_NP + MAX_COUNTERS)) {
+    offset = -(GPIO_CNTR1_NP - GPIO_CNTR1);
+  }
+
+  for (uint8_t i = 0; i < MAX_GPIO_PIN; i++) {
+    if (arr[i] == val) { return true; }
+    if (arr[i] == val + offset) { return true; }
+  }
+  return false;
+}
+
+void TemplateJson()
+{
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("{\"" D_JSON_NAME "\":\"%s\",\"" D_JSON_GPIO "\":["), Settings.user_template.name);
+  for (uint8_t i = 0; i < sizeof(Settings.user_template.gp); i++) {
+    snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s%s%d"), mqtt_data, (i>0)?",":"", Settings.user_template.gp.io[i]);
+  }
+//  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s],\"" D_JSON_FLAG "\":%d,\"" D_JSON_BASE "\":\"%d (%s)\"}"),
+//    mqtt_data, Settings.user_template.flag, Settings.user_template_base +1, AnyModuleName(Settings.user_template_base).c_str());
+  snprintf_P(mqtt_data, sizeof(mqtt_data), PSTR("%s],\"" D_JSON_FLAG "\":%d,\"" D_JSON_BASE "\":%d}"),
+    mqtt_data, Settings.user_template.flag, Settings.user_template_base +1);
 }
 
 /*********************************************************************************************\
@@ -886,7 +931,7 @@ uint32_t i2c_buffer = 0;
 
 bool I2cValidRead(uint8_t addr, uint8_t reg, uint8_t size)
 {
-  byte x = I2C_RETRY_COUNTER;
+  uint8_t x = I2C_RETRY_COUNTER;
 
   i2c_buffer = 0;
   do {
@@ -895,7 +940,7 @@ bool I2cValidRead(uint8_t addr, uint8_t reg, uint8_t size)
     if (0 == Wire.endTransmission(false)) {             // Try to become I2C Master, send data and collect bytes, keep master status for next request...
       Wire.requestFrom((int)addr, (int)size);           // send data n-bytes read
       if (Wire.available() == size) {
-        for (byte i = 0; i < size; i++) {
+        for (uint8_t i = 0; i < size; i++) {
           i2c_buffer = i2c_buffer << 8 | Wire.read();   // receive DATA
         }
       }
@@ -987,7 +1032,7 @@ int32_t I2cRead24(uint8_t addr, uint8_t reg)
 
 bool I2cWrite(uint8_t addr, uint8_t reg, uint32_t val, uint8_t size)
 {
-  byte x = I2C_RETRY_COUNTER;
+  uint8_t x = I2C_RETRY_COUNTER;
 
   do {
     Wire.beginTransmission((uint8_t)addr);              // start transmission to device
@@ -1016,7 +1061,7 @@ int8_t I2cReadBuffer(uint8_t addr, uint8_t reg, uint8_t *reg_data, uint16_t len)
   Wire.beginTransmission((uint8_t)addr);
   Wire.write((uint8_t)reg);
   Wire.endTransmission();
-  if (len != Wire.requestFrom((uint8_t)addr, (byte)len)) {
+  if (len != Wire.requestFrom((uint8_t)addr, (uint8_t)len)) {
     return 1;
   }
   while (len--) {
@@ -1047,9 +1092,9 @@ void I2cScan(char *devs, unsigned int devs_len)
   // I2C_SDA_HELD_LOW            3 = I2C bus error. SDA line held low by slave/another_master after n bits
   // I2C_SDA_HELD_LOW_AFTER_INIT 4 = line busy. SDA again held low by another device. 2nd master?
 
-  byte error = 0;
-  byte address = 0;
-  byte any = 0;
+  uint8_t error = 0;
+  uint8_t address = 0;
+  uint8_t any = 0;
 
   snprintf_P(devs, devs_len, PSTR("{\"" D_CMND_I2CSCAN "\":\"" D_JSON_I2CSCAN_DEVICES_FOUND_AT));
   for (address = 1; address <= 127; address++) {
@@ -1073,9 +1118,9 @@ void I2cScan(char *devs, unsigned int devs_len)
   }
 }
 
-boolean I2cDevice(byte addr)
+bool I2cDevice(uint8_t addr)
 {
-  for (byte address = 1; address <= 127; address++) {
+  for (uint8_t address = 1; address <= 127; address++) {
     Wire.beginTransmission(address);
     if (!Wire.endTransmission() && (address == addr)) {
       return true;
@@ -1094,7 +1139,7 @@ boolean I2cDevice(byte addr)
  *
 \*********************************************************************************************/
 
-void SetSeriallog(byte loglevel)
+void SetSeriallog(uint8_t loglevel)
 {
   Settings.seriallog_level = loglevel;
   seriallog_level = loglevel;
@@ -1102,7 +1147,7 @@ void SetSeriallog(byte loglevel)
 }
 
 #ifdef USE_WEBSERVER
-void GetLog(byte idx, char** entry_pp, size_t* len_p)
+void GetLog(uint8_t idx, char** entry_pp, size_t* len_p)
 {
   char* entry_p = NULL;
   size_t len = 0;
@@ -1110,7 +1155,7 @@ void GetLog(byte idx, char** entry_pp, size_t* len_p)
   if (idx) {
     char* it = web_log;
     do {
-      byte cur_idx = *it;
+      uint8_t cur_idx = *it;
       it++;
       size_t tmp = strchrspn(it, '\1');
       tmp++;                             // Skip terminating '\1'
@@ -1151,7 +1196,7 @@ void Syslog(void)
   }
 }
 
-void AddLog(byte loglevel)
+void AddLog(uint8_t loglevel)
 {
   char mxtime[10];  // "13:45:21 "
 
@@ -1181,13 +1226,13 @@ void AddLog(byte loglevel)
   if (!global_state.wifi_down && (loglevel <= syslog_level)) { Syslog(); }
 }
 
-void AddLog_P(byte loglevel, const char *formatP)
+void AddLog_P(uint8_t loglevel, const char *formatP)
 {
   snprintf_P(log_data, sizeof(log_data), formatP);
   AddLog(loglevel);
 }
 
-void AddLog_P(byte loglevel, const char *formatP, const char *formatP2)
+void AddLog_P(uint8_t loglevel, const char *formatP, const char *formatP2)
 {
   char message[100];
 
@@ -1197,18 +1242,18 @@ void AddLog_P(byte loglevel, const char *formatP, const char *formatP2)
   AddLog(loglevel);
 }
 
-void AddLogSerial(byte loglevel, uint8_t *buffer, int count)
+void AddLogBuffer(uint8_t loglevel, uint8_t *buffer, int count)
 {
-  snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_SERIAL D_RECEIVED));
+  snprintf_P(log_data, sizeof(log_data), PSTR("DMP:"));
   for (int i = 0; i < count; i++) {
     snprintf_P(log_data, sizeof(log_data), PSTR("%s %02X"), log_data, *(buffer++));
   }
   AddLog(loglevel);
 }
 
-void AddLogSerial(byte loglevel)
+void AddLogSerial(uint8_t loglevel)
 {
-  AddLogSerial(loglevel, (uint8_t*)serial_in_buffer, serial_in_byte_counter);
+  AddLogBuffer(loglevel, (uint8_t*)serial_in_buffer, serial_in_byte_counter);
 }
 
 void AddLogMissed(char *sensor, uint8_t misses)
